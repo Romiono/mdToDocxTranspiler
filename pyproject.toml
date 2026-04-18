@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "md-to-docx-gost"
+version = "1.0.0"
+description = "Markdown → DOCX transpiler compliant with GOST 7.32-2017 (КубГУ 2019)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["markdown", "docx", "gost", "academic", "thesis"]
+dependencies = [
+    "python-docx>=1.1.0",
+    "Pillow>=10.0.0",
+    "latex2mathml>=3.78.0",
+    "mathml2omml>=0.0.2",
+    "lxml>=5.0.0",
+]
+
+[project.scripts]
+md2docx = "transpiler:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages    = ["parsing", "omml", "writer"]
+py-modules  = ["transpiler", "renderer", "constants"]
