@@ -1,5 +1,10 @@
+import base64
 import os
 import re
+import subprocess
+import tempfile
+import urllib.request
+import zlib
 from typing import List, Optional
 
 from docx import Document
@@ -27,6 +32,51 @@ from writer.helpers import (
 )
 
 
+def _render_mermaid(code: str) -> Optional[str]:
+    """Render Mermaid diagram code to a temporary PNG file.
+
+    Tries mmdc (Mermaid CLI) first, then kroki.io HTTP API.
+    Returns the path to the generated PNG, or None on failure.
+    The caller is responsible for deleting the file.
+    """
+    # --- mmdc (Mermaid CLI via Node.js) ---
+    try:
+        mmd_fd, mmd_path = tempfile.mkstemp(suffix='.mmd')
+        png_path = mmd_path[:-4] + '.png'
+        try:
+            with os.fdopen(mmd_fd, 'w', encoding='utf-8') as f:
+                f.write(code)
+            result = subprocess.run(
+                ['mmdc', '-i', mmd_path, '-o', png_path, '-b', 'white', '--quiet'],
+                capture_output=True,
+                timeout=30,
+            )
+            if result.returncode == 0 and os.path.exists(png_path):
+                return png_path
+        finally:
+            if os.path.exists(mmd_path):
+                os.unlink(mmd_path)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+
+    # --- kroki.io HTTP API ---
+    try:
+        compressed = zlib.compress(code.encode('utf-8'), 9)
+        encoded = base64.urlsafe_b64encode(compressed).decode('ascii')
+        url = f'https://kroki.io/mermaid/png/{encoded}'
+        req = urllib.request.Request(url, headers={'User-Agent': 'md2docx-gost/1.0'})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = resp.read()
+        png_fd, png_path = tempfile.mkstemp(suffix='.png')
+        with os.fdopen(png_fd, 'wb') as f:
+            f.write(data)
+        return png_path
+    except Exception:
+        pass
+
+    return None
+
+
 class GostDocxBuilder:
     def __init__(self):
         self.doc = Document()
@@ -41,6 +91,7 @@ class GostDocxBuilder:
         self.appendix_figure_counter  = 0
         self.appendix_table_counter   = 0
         self.appendix_formula_counter = 0
+        self._last_was_page_break     = False
 
         self._setup_page()
         self._add_page_numbers()
@@ -79,6 +130,7 @@ class GostDocxBuilder:
     def add_structural_heading(self, text: str, page_break_before: bool = True):
         if page_break_before:
             self._page_break()
+        self._last_was_page_break = False
         para                          = self.doc.add_paragraph()
         fmt                           = self._base_para_fmt(para, align=WD_ALIGN_PARAGRAPH.CENTER)
         fmt.first_line_indent         = Pt(0)
@@ -96,6 +148,7 @@ class GostDocxBuilder:
             self._page_break()
         elif level >= 2:
             self._blank_line()
+        self._last_was_page_break = False
         full_text                     = f'{number} {text}'.strip() if number else text
         para                          = self.doc.add_paragraph()
         fmt                           = self._base_para_fmt(para, align=WD_ALIGN_PARAGRAPH.LEFT)
@@ -115,6 +168,7 @@ class GostDocxBuilder:
         self.appendix_table_counter   = 0
         self.appendix_formula_counter = 0
         self._page_break()
+        self._last_was_page_break = False
         para                          = self.doc.add_paragraph()
         fmt                           = self._base_para_fmt(para, align=WD_ALIGN_PARAGRAPH.CENTER)
         fmt.first_line_indent         = Pt(0)
@@ -125,6 +179,7 @@ class GostDocxBuilder:
         return para
 
     def add_appendix_title(self, text: str):
+        self._last_was_page_break = False
         para                  = self.doc.add_paragraph()
         fmt                   = self._base_para_fmt(para, align=WD_ALIGN_PARAGRAPH.CENTER)
         fmt.first_line_indent = Pt(0)
@@ -134,6 +189,7 @@ class GostDocxBuilder:
         return para
 
     def add_paragraph(self, text: str):
+        self._last_was_page_break = False
         para = self.doc.add_paragraph()
         self._base_para_fmt(para, first_line=PARA_INDENT)
         add_inline(para, text)
@@ -141,6 +197,7 @@ class GostDocxBuilder:
 
     def add_list_item(self, marker_type: str, marker: str,
                       text: str, indent_level: int = 0):
+        self._last_was_page_break = False
         para                  = self.doc.add_paragraph()
         fmt                   = para.paragraph_format
         fmt.alignment         = WD_ALIGN_PARAGRAPH.JUSTIFY
@@ -154,6 +211,7 @@ class GostDocxBuilder:
         return para
 
     def add_table(self, header, rows, caption=None):
+        self._last_was_page_break = False
         cap_text = self._resolve_table_caption(caption)
 
         cap_para                      = self.doc.add_paragraph()
@@ -211,6 +269,7 @@ class GostDocxBuilder:
         return f'Таблица {num}' + (f' – {raw}' if raw else '')
 
     def add_figure(self, src: str, alt: str):
+        self._last_was_page_break = False
         if self.current_appendix:
             self.appendix_figure_counter += 1
             num = f'{self.current_appendix}.{self.appendix_figure_counter}'
@@ -241,7 +300,47 @@ class GostDocxBuilder:
         self._blank_line()
         return cap_para
 
+    def add_diagram(self, code: str, alt: str):
+        self._last_was_page_break = False
+        if self.current_appendix:
+            self.appendix_figure_counter += 1
+            num = f'{self.current_appendix}.{self.appendix_figure_counter}'
+        else:
+            self.figure_counter += 1
+            num = str(self.figure_counter)
+
+        tmp_png = _render_mermaid(code)
+        img_added = False
+
+        if tmp_png:
+            try:
+                para           = self.doc.add_paragraph()
+                para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                para.add_run().add_picture(tmp_png, width=Cm(15.5))
+                img_added = True
+            except Exception:
+                pass
+            finally:
+                try:
+                    os.unlink(tmp_png)
+                except OSError:
+                    pass
+
+        if not img_added:
+            para           = self.doc.add_paragraph()
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            fmt_run(para.add_run(f'[Диаграмма: {alt}]'), size=FONT_SIZE_MAIN, italic=True)
+
+        cap_para              = self.doc.add_paragraph()
+        fmt                   = self._base_para_fmt(cap_para, align=WD_ALIGN_PARAGRAPH.CENTER)
+        fmt.first_line_indent = Pt(0)
+        caption_text = f'Рисунок {num}' + (f' – {alt}' if alt else '')
+        add_inline(cap_para, caption_text, base_size=FONT_SIZE_MAIN)
+        self._blank_line()
+        return cap_para
+
     def add_formula(self, formula_text: str, explicit_number: Optional[str] = None):
+        self._last_was_page_break = False
         if self.current_appendix:
             self.appendix_formula_counter += 1
             num = f'{self.current_appendix}.{self.appendix_formula_counter}'
@@ -316,6 +415,9 @@ class GostDocxBuilder:
         self._blank_line()
 
     def _page_break(self):
+        if self._last_was_page_break:
+            return
+        self._last_was_page_break = True
         para = self.doc.add_paragraph()
         para.add_run().add_break(WD_BREAK.PAGE)
         return para

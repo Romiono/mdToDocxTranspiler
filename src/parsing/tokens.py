@@ -55,6 +55,12 @@ class FigureToken(Token):
 
 
 @dataclass
+class DiagramToken(Token):
+    code: str
+    alt: str
+
+
+@dataclass
 class FormulaToken(Token):
     formula: str
     number: Optional[str] = None

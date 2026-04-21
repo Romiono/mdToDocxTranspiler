@@ -3,7 +3,7 @@ from parsing.tokens import (
     StructuralHeadingToken, SectionHeadingToken,
     AppendixHeadingToken, AppendixTitleToken,
     ParagraphToken, ListItemToken, TableToken,
-    FigureToken, FormulaToken, FormulaWhereToken,
+    FigureToken, DiagramToken, FormulaToken, FormulaWhereToken,
 )
 from writer.builder import GostDocxBuilder
 
@@ -54,6 +54,10 @@ def render(tokens: list, builder: GostDocxBuilder) -> None:
 
         if isinstance(tok, FigureToken):
             builder.add_figure(tok.src, tok.alt)
+            i += 1; continue
+
+        if isinstance(tok, DiagramToken):
+            builder.add_diagram(tok.code, tok.alt)
             i += 1; continue
 
         if isinstance(tok, FormulaToken):
