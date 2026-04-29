@@ -7,6 +7,8 @@ import urllib.request
 import zlib
 from typing import List, Optional
 
+from lxml import etree as _etree
+
 from docx import Document
 from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
@@ -29,6 +31,8 @@ from omml import latex_to_omml_elem
 from writer.helpers import (
     fmt_run, set_spacing, set_outline_level,
     set_keep_with_next, add_page_number_field, add_inline,
+    disable_snap_to_grid as _disable_snap_to_grid,
+    set_para_default_font as _set_para_default_font,
 )
 
 
@@ -84,16 +88,18 @@ class GostDocxBuilder:
         for child in list(body.iterchildren(qn('w:p'))):
             body.remove(child)
 
-        self.figure_counter           = 0
-        self.table_counter            = 0
-        self.formula_counter          = 0
-        self.current_appendix         = None
-        self.appendix_figure_counter  = 0
-        self.appendix_table_counter   = 0
-        self.appendix_formula_counter = 0
-        self._last_was_page_break     = False
+        self.figure_counter             = 0
+        self.table_counter              = 0
+        self.formula_counter            = 0
+        self.current_appendix           = None
+        self.appendix_figure_counter    = 0
+        self.appendix_table_counter     = 0
+        self.appendix_formula_counter   = 0
+        self._last_was_page_break       = False
+        self._last_added_blank  = False
 
         self._setup_page()
+        self._setup_math_font()
         self._add_page_numbers()
 
     def _setup_page(self):
@@ -104,6 +110,29 @@ class GostDocxBuilder:
         s.right_margin  = MARGIN_RIGHT
         s.top_margin    = MARGIN_TOP
         s.bottom_margin = MARGIN_BOTTOM
+
+        # Set document grid to "lines" mode so Word stretches word spaces
+        # (not inter-character spacing) when justifying text.
+        # "linesAndChars" (Word default on some locales) causes letter-spacing expansion.
+        sect_pr = s._sectPr
+        doc_grid = sect_pr.find(qn('w:docGrid'))
+        if doc_grid is None:
+            doc_grid = OxmlElement('w:docGrid')
+            sect_pr.append(doc_grid)
+        doc_grid.set(qn('w:type'), 'lines')
+        doc_grid.set(qn('w:linePitch'), '360')
+
+    def _setup_math_font(self):
+        _M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+        settings_el = self.doc.settings.element
+        math_pr = settings_el.find(f'{{{_M}}}mathPr')
+        if math_pr is None:
+            math_pr = _etree.SubElement(settings_el, f'{{{_M}}}mathPr')
+        for child_tag in (f'{{{_M}}}mathFont',):
+            child = math_pr.find(child_tag)
+            if child is None:
+                child = _etree.SubElement(math_pr, child_tag)
+            child.set(f'{{{_M}}}val', 'Times New Roman')
 
     def _add_page_numbers(self):
         footer = self.doc.sections[0].footer
@@ -125,12 +154,15 @@ class GostDocxBuilder:
             fmt.first_line_indent = first_line
         if left_indent is not None:
             fmt.left_indent = left_indent
+        _disable_snap_to_grid(para)
+        _set_para_default_font(para, FONT_SIZE_MAIN)
         return fmt
 
     def add_structural_heading(self, text: str, page_break_before: bool = True):
         if page_break_before:
             self._page_break()
-        self._last_was_page_break = False
+        self._last_was_page_break      = False
+        self._last_added_blank = False
         para                          = self.doc.add_paragraph()
         fmt                           = self._base_para_fmt(para, align=WD_ALIGN_PARAGRAPH.CENTER)
         fmt.first_line_indent         = Pt(0)
@@ -141,14 +173,18 @@ class GostDocxBuilder:
             set_outline_level(para, 0)
         set_keep_with_next(para)
         self._blank_line()
+        self._last_added_blank = True
         return para
 
     def add_section_heading(self, number: str, text: str, level: int = 1):
         if level == 1 and number:
             self._page_break()
+            self._last_added_blank = False
         elif level >= 2:
-            self._blank_line()
-        self._last_was_page_break = False
+            if not self._last_added_blank:
+                self._blank_line()
+        self._last_was_page_break      = False
+        self._last_added_blank = False
         full_text                     = f'{number} {text}'.strip() if number else text
         para                          = self.doc.add_paragraph()
         fmt                           = self._base_para_fmt(para, align=WD_ALIGN_PARAGRAPH.LEFT)
@@ -160,6 +196,7 @@ class GostDocxBuilder:
             set_outline_level(para, level - 1)
         set_keep_with_next(para)
         self._blank_line()
+        self._last_added_blank = True
         return para
 
     def add_appendix_heading(self, letter: str):
@@ -189,7 +226,8 @@ class GostDocxBuilder:
         return para
 
     def add_paragraph(self, text: str):
-        self._last_was_page_break = False
+        self._last_was_page_break      = False
+        self._last_added_blank = False
         para = self.doc.add_paragraph()
         self._base_para_fmt(para, first_line=PARA_INDENT)
         add_inline(para, text)
@@ -197,7 +235,8 @@ class GostDocxBuilder:
 
     def add_list_item(self, marker_type: str, marker: str,
                       text: str, indent_level: int = 0):
-        self._last_was_page_break = False
+        self._last_was_page_break      = False
+        self._last_added_blank = False
         para                  = self.doc.add_paragraph()
         fmt                   = para.paragraph_format
         fmt.alignment         = WD_ALIGN_PARAGRAPH.JUSTIFY
@@ -206,19 +245,23 @@ class GostDocxBuilder:
         fmt.left_indent       = base + Cm(0.5)
         fmt.first_line_indent = Cm(-0.5)
         set_spacing(fmt, before=0, after=0, line=LINE_SPACING)
+        _disable_snap_to_grid(para)
         fmt_run(para.add_run(marker + '\t'), size=FONT_SIZE_MAIN)
         add_inline(para, text)
         return para
 
     def add_table(self, header, rows, caption=None):
         self._last_was_page_break = False
+        if not self._last_added_blank:
+            self._blank_line()
+        self._last_added_blank = False
         cap_text = self._resolve_table_caption(caption)
 
         cap_para                      = self.doc.add_paragraph()
         fmt                           = self._base_para_fmt(cap_para, align=WD_ALIGN_PARAGRAPH.LEFT)
         fmt.first_line_indent         = Pt(0)
         fmt.space_after               = Pt(3)
-        add_inline(cap_para, cap_text, base_size=FONT_SIZE_TABLE)
+        add_inline(cap_para, cap_text, base_size=FONT_SIZE_MAIN)
         set_keep_with_next(cap_para)
 
         col_count = max(
@@ -255,6 +298,7 @@ class GostDocxBuilder:
                 add_inline(p, txt, base_size=FONT_SIZE_TABLE)
 
         self._blank_line()
+        self._last_added_blank = True
         return tbl
 
     def _resolve_table_caption(self, raw: Optional[str]) -> str:
@@ -270,6 +314,9 @@ class GostDocxBuilder:
 
     def add_figure(self, src: str, alt: str):
         self._last_was_page_break = False
+        if not self._last_added_blank:
+            self._blank_line()
+        self._last_added_blank = False
         if self.current_appendix:
             self.appendix_figure_counter += 1
             num = f'{self.current_appendix}.{self.appendix_figure_counter}'
@@ -298,10 +345,14 @@ class GostDocxBuilder:
         caption_text = f'Рисунок {num}' + (f' – {alt}' if alt else '')
         add_inline(cap_para, caption_text, base_size=FONT_SIZE_MAIN)
         self._blank_line()
+        self._last_added_blank = True
         return cap_para
 
     def add_diagram(self, code: str, alt: str):
         self._last_was_page_break = False
+        if not self._last_added_blank:
+            self._blank_line()
+        self._last_added_blank = False
         if self.current_appendix:
             self.appendix_figure_counter += 1
             num = f'{self.current_appendix}.{self.appendix_figure_counter}'
@@ -337,6 +388,7 @@ class GostDocxBuilder:
         caption_text = f'Рисунок {num}' + (f' – {alt}' if alt else '')
         add_inline(cap_para, caption_text, base_size=FONT_SIZE_MAIN)
         self._blank_line()
+        self._last_added_blank = True
         return cap_para
 
     def add_formula(self, formula_text: str, explicit_number: Optional[str] = None):
@@ -348,12 +400,16 @@ class GostDocxBuilder:
             self.formula_counter += 1
             num = explicit_number or str(self.formula_counter)
 
-        self._blank_line()
+        if not self._last_added_blank:
+            self._blank_line()
+        self._last_added_blank = False
         para                  = self.doc.add_paragraph()
         fmt                   = para.paragraph_format
         fmt.alignment         = WD_ALIGN_PARAGRAPH.CENTER
         fmt.first_line_indent = Pt(0)
         set_spacing(fmt, before=0, after=0, line=LINE_SPACING)
+        _disable_snap_to_grid(para)
+        _set_para_default_font(para, FONT_SIZE_MAIN)
 
         omml = latex_to_omml_elem(formula_text)
         if omml is not None:
@@ -375,6 +431,7 @@ class GostDocxBuilder:
         tabs_elem.append(tab_stop)
 
         self._blank_line()
+        self._last_added_blank = True
         return para
 
     def add_formula_where(self, items: List[str]):
@@ -391,6 +448,7 @@ class GostDocxBuilder:
             add_inline(para, clean, base_size=FONT_SIZE_MAIN)
             fmt_run(para.add_run(';' if idx < len(items) - 1 else '.'), size=FONT_SIZE_MAIN)
         self._blank_line()
+        self._last_added_blank = True
 
     def add_toc(self):
         para           = self.doc.add_paragraph()

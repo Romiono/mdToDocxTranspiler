@@ -42,6 +42,31 @@ def set_outline_level(para, level: int):
     ol.set(qn('w:val'), str(level))
 
 
+def disable_snap_to_grid(para):
+    pPr  = para._p.get_or_add_pPr()
+    elem = pPr.find(qn('w:snapToGrid'))
+    if elem is None:
+        elem = OxmlElement('w:snapToGrid')
+        pPr.append(elem)
+    elem.set(qn('w:val'), '0')
+
+
+def set_para_default_font(para, size):
+    """Set paragraph default run font size so OMML math objects inherit it."""
+    val  = str(int(size.pt * 2))
+    pPr  = para._p.get_or_add_pPr()
+    rPr  = pPr.find(qn('w:rPr'))
+    if rPr is None:
+        rPr = OxmlElement('w:rPr')
+        pPr.append(rPr)
+    for tag in ('w:sz', 'w:szCs'):
+        elem = rPr.find(qn(tag))
+        if elem is None:
+            elem = OxmlElement(tag)
+            rPr.append(elem)
+        elem.set(qn('w:val'), val)
+
+
 def set_keep_with_next(para):
     pPr = para._p.get_or_add_pPr()
     if pPr.find(qn('w:keepNext')) is None:
@@ -74,6 +99,7 @@ def add_inline(para, text: str, base_size=None,
                base_bold: bool = False, base_italic: bool = False):
     if base_size is None:
         base_size = FONT_SIZE_MAIN
+    text = text.replace('—', '–')
     pos = 0
     for m in _INLINE_RE.finditer(text):
         if m.start() > pos:
