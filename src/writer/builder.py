@@ -312,6 +312,43 @@ class GostDocxBuilder:
             num = str(self.table_counter)
         return f'Таблица {num}' + (f' – {raw}' if raw else '')
 
+    def add_code_block(self, code: str, language: str = ''):
+        self._last_was_page_break = False
+        if not self._last_added_blank:
+            self._blank_line()
+        self._last_added_blank = False
+
+        lines = code.split('\n')
+        for line in lines:
+            para = self.doc.add_paragraph()
+            fmt = para.paragraph_format
+            fmt.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            fmt.first_line_indent = Pt(0)
+            fmt.left_indent = PARA_INDENT
+            set_spacing(fmt, before=0, after=0, line=1.0)
+            _disable_snap_to_grid(para)
+
+            pPr = para._p.get_or_add_pPr()
+            shd = OxmlElement('w:shd')
+            shd.set(qn('w:val'), 'clear')
+            shd.set(qn('w:color'), 'auto')
+            shd.set(qn('w:fill'), 'F2F2F2')
+            pPr.append(shd)
+
+            run = para.add_run(line if line else ' ')
+            run.font.name = 'Courier New'
+            run.font.size = FONT_SIZE_TABLE
+            rpr = run._r.get_or_add_rPr()
+            rFonts = rpr.find(qn('w:rFonts'))
+            if rFonts is None:
+                rFonts = OxmlElement('w:rFonts')
+                rpr.insert(0, rFonts)
+            for attr in ('w:ascii', 'w:hAnsi', 'w:cs'):
+                rFonts.set(qn(attr), 'Courier New')
+
+        self._blank_line()
+        self._last_added_blank = True
+
     def add_figure(self, src: str, alt: str):
         self._last_was_page_break = False
         if not self._last_added_blank:

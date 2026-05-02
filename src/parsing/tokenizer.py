@@ -7,6 +7,7 @@ from parsing.tokens import (
     AppendixHeadingToken, AppendixTitleToken, ParagraphToken,
     ListItemToken, TableToken, FigureToken, DiagramToken, FormulaToken,
     FormulaWhereToken, PageBreakToken, TocToken, EmptyLineToken,
+    CodeBlockToken,
 )
 
 _SECTION_NUM_RE   = re.compile(r'^(\d+(?:\.\d+)*)\s+(.+)$')
@@ -21,7 +22,8 @@ _FORMULA_LINE_RE  = re.compile(r'^\$\$(.+)\$\$\s*(?:\((\S+)\))?$')
 _TABLE_CAPTION_RE = re.compile(r'^<!--\s*(Таблица\s+\S+\s*–.+?)\s*-->$')
 _NAMED_TABLE_CAP  = re.compile(r'^(Таблица\s+[\w.]+\s*–\s*.+)$')
 _PAGEBREAK_RE     = re.compile(r'^---$|^<!-- pagebreak -->$', re.IGNORECASE)
-_MERMAID_OPEN_RE  = re.compile(r'^```mermaid\s*(.*)', re.IGNORECASE)
+_MERMAID_OPEN_RE   = re.compile(r'^```mermaid\s*(.*)', re.IGNORECASE)
+_CODE_BLOCK_OPEN_RE = re.compile(r'^```(\w*)\s*$')
 
 def tokenize(lines: List[str]) -> List[Token]:
     tokens: List[Token] = []
@@ -71,6 +73,12 @@ def tokenize(lines: List[str]) -> List[Token]:
         m = _MERMAID_OPEN_RE.match(stripped)
         if m:
             i, tok = _handle_mermaid_block(lines, i, m.group(1).strip())
+            tokens.append(tok)
+            continue
+
+        m = _CODE_BLOCK_OPEN_RE.match(stripped)
+        if m:
+            i, tok = _handle_code_block(lines, i, m.group(1).strip())
             tokens.append(tok)
             continue
 
@@ -202,6 +210,19 @@ def _handle_where_block(lines: list, i: int, stripped: str):
     return i, FormulaWhereToken(items=items)
 
 
+def _handle_code_block(lines: list, i: int, language: str):
+    code_lines = []
+    i += 1
+    while i < len(lines):
+        nl = lines[i].rstrip()
+        if nl.strip() == '```':
+            i += 1
+            break
+        code_lines.append(nl)
+        i += 1
+    return i, CodeBlockToken(code='\n'.join(code_lines), language=language)
+
+
 def _handle_mermaid_block(lines: list, i: int, alt: str):
     code_lines = []
     i += 1
@@ -224,6 +245,7 @@ def _handle_paragraph(lines: list, i: int, first_line: str):
             break
         if (nl.startswith('#') or nl.startswith('|') or nl.startswith('![')
                 or nl.startswith('$$') or nl.startswith('> ')
+                or nl.startswith('```')
                 or _MERMAID_OPEN_RE.match(nl)
                 or _LIST_DASH_RE.match(nl) or _LIST_LETTER_RE.match(nl)
                 or _LIST_DIGIT_RE.match(nl)

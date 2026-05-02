@@ -81,3 +81,9 @@ class TocToken(Token):
 
 class EmptyLineToken(Token):
     pass
+
+
+@dataclass
+class CodeBlockToken(Token):
+    code: str
+    language: str = ''

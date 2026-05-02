@@ -4,6 +4,7 @@ from parsing.tokens import (
     AppendixHeadingToken, AppendixTitleToken,
     ParagraphToken, ListItemToken, TableToken,
     FigureToken, DiagramToken, FormulaToken, FormulaWhereToken,
+    CodeBlockToken,
 )
 from writer.builder import GostDocxBuilder
 
@@ -50,6 +51,10 @@ def render(tokens: list, builder: GostDocxBuilder) -> None:
 
         if isinstance(tok, TableToken):
             builder.add_table(tok.header, tok.rows, caption=tok.caption)
+            i += 1; continue
+
+        if isinstance(tok, CodeBlockToken):
+            builder.add_code_block(tok.code, tok.language)
             i += 1; continue
 
         if isinstance(tok, FigureToken):
