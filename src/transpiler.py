@@ -15,8 +15,9 @@ def transpile(md_path: str, docx_path: str) -> None:
         if end != -1:
             text = text[end + 4:]
 
-    tokens  = tokenize(text.splitlines())
-    builder = GostDocxBuilder()
+    base_dir = str(Path(md_path).resolve().parent)
+    tokens   = tokenize(text.splitlines())
+    builder  = GostDocxBuilder(base_dir=base_dir)
     render(tokens, builder)
     builder.save(docx_path)
     print(f'✓ Saved: {docx_path}')

@@ -36,6 +36,15 @@ from writer.helpers import (
 )
 
 
+def _prepare_mermaid_code(code: str) -> str:
+    # Replace literal \n sequences (backslash + n written in mermaid labels)
+    # with <br/> and enable HTML labels so renderers treat them as line breaks.
+    code = code.replace('\\n', '<br/>')
+    if not code.startswith('%%{'):
+        code = "%%{init: {'htmlLabels': true}}%%\n" + code
+    return code
+
+
 def _render_mermaid(code: str) -> Optional[str]:
     """Render Mermaid diagram code to a temporary PNG file.
 
@@ -43,6 +52,8 @@ def _render_mermaid(code: str) -> Optional[str]:
     Returns the path to the generated PNG, or None on failure.
     The caller is responsible for deleting the file.
     """
+    code = _prepare_mermaid_code(code)
+
     # --- mmdc (Mermaid CLI via Node.js) ---
     try:
         mmd_fd, mmd_path = tempfile.mkstemp(suffix='.mmd')
@@ -82,7 +93,8 @@ def _render_mermaid(code: str) -> Optional[str]:
 
 
 class GostDocxBuilder:
-    def __init__(self):
+    def __init__(self, base_dir: str = ''):
+        self.base_dir = base_dir
         self.doc = Document()
         body = self.doc.element.body
         for child in list(body.iterchildren(qn('w:p'))):
@@ -361,12 +373,13 @@ class GostDocxBuilder:
             self.figure_counter += 1
             num = str(self.figure_counter)
 
+        resolved = os.path.join(self.base_dir, src) if self.base_dir else src
         img_added = False
-        if src and os.path.exists(src):
+        if src and os.path.exists(resolved):
             try:
                 para           = self.doc.add_paragraph()
                 para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                para.add_run().add_picture(src, width=Cm(15.5))
+                para.add_run().add_picture(resolved, width=Cm(15.5))
                 img_added = True
             except Exception:
                 pass
